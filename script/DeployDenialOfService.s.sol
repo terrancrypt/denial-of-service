@@ -2,7 +2,7 @@
 pragma solidity ^0.8.0;
 
 import {Script} from "forge-std/Script.sol";
-import {DenialOfService} from "src/DenialOfService.sol";
+import {DenialOfService} from "src/DenialOfServiceFixedByLib.sol";
 
 contract DeployDenialOfService is Script {
     DenialOfService denialOfService;

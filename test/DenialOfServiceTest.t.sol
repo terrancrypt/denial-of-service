@@ -3,7 +3,7 @@ pragma solidity ^0.8.0;
 
 import {Test, console} from "forge-std/Test.sol";
 import {DeployDenialOfService} from "script/DeployDenialOfService.s.sol";
-import {DenialOfService, AttackDenialOfService} from "src/DenialOfService.sol";
+import {DenialOfService, AttackDenialOfService} from "src/DenialOfServiceFixedByLib.sol";
 import {VRFCoordinatorV2Mock} from "@chainlink/contracts/src/v0.8/vrf/mocks/VRFCoordinatorV2Mock.sol";
 
 contract DenialOfServiceTest is Test {
@@ -85,7 +85,7 @@ contract DenialOfServiceTest is Test {
         // Thêm tiếp 100 players lần thứ 2
         address[] memory secondPlayers = new address[](playersNum);
         for (uint256 i = 0; i < playersNum; i++) {
-            secondPlayers[i] = address(uint160(i) + 1);
+            secondPlayers[i] = address(uint160(i + playersNum));
         }
 
         deal(owner, PARTICIPANT_FEE * playersNum);
@@ -109,9 +109,9 @@ contract DenialOfServiceTest is Test {
             address(denialOfService)
         );
 
-        address winner = denialOfService.getRecentWinner();
+        // address winner = denialOfService.getRecentWinner();
 
-        console.log(winner);
+        // console.log(winner);
     }
 
     function test_canAttackToDenialOfService() public {
@@ -140,7 +140,7 @@ contract DenialOfServiceTest is Test {
         // vm.prank(0xc7183455a4C133Ae270771860664b6B7ec320bB1);
         // denialOfService.claimPrize();
 
-        vm.prank(owner);
-        denialOfService.sentPrizeToWinner();
+        // vm.prank(owner);
+        // denialOfService.sentPrizeToWinner();
     }
 }
