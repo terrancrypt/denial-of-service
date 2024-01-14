@@ -13,13 +13,18 @@ contract DenialOfService is VRFConsumerBaseV2, Ownable {
     error DenialOfService_SendingEtherError();
     error DenialOfService_RaffleNotOpen();
     error DenialOfService_NotTheWinner(address winner);
-    error DenialOfService_NotEnoughParticipants(address[] currentParticipants);
+    error DenialOfService_NotEnoughParticipants(uint256 numberOfParticipants);
     error DenialOfService_DontHaveWinner();
+    error DenialOfService_InsufficientBalance();
 
-    address[] private s_participants; // chứa thông tin những người tham gia vào xổ số
+    mapping(uint256 id => address participant) private s_participants;
+    uint256 private s_participantCurrentId;
+    mapping(address participant => bool exists) private s_isParticipantExists;
+
     uint private s_participantFee; // chứa thông tin về phí tham gia của mỗi người chơi
     bool private s_isRaffleOpen; //  cho biết xổ số có đang mở để tham gia hay không
-    address private s_recentWinner; // cho biết người trúng số gần nhất là ai
+
+    mapping(address winner => uint256 amount) private s_winnerBalance;
 
     // Chainlink VRF // Để lấy số ngẫu nhiên một cách công bằng
     uint64 s_subscriptionId;
@@ -69,15 +74,13 @@ contract DenialOfService is VRFConsumerBaseV2, Ownable {
 
         // DOS: unbounded for loop
         for (uint256 i; i < newParticipants.length; i++) {
-            for (uint256 j; j < s_participants.length; j++) {
-                if (newParticipants[i] == s_participants[j]) {
-                    revert DenialOfService_UnableToRejoin();
-                }
+            if (s_isParticipantExists[newParticipants[i]] == true) {
+                revert DenialOfService_UnableToRejoin();
             }
-        }
 
-        for (uint256 i; i < newParticipants.length; i++) {
-            s_participants.push(newParticipants[i]);
+            s_participants[s_participantCurrentId] = newParticipants[i];
+            s_participantCurrentId++;
+            s_isParticipantExists[newParticipants[i]] = true;
         }
 
         emit NewParticipantsEntered(newParticipants);
@@ -92,20 +95,22 @@ contract DenialOfService is VRFConsumerBaseV2, Ownable {
             revert DenialOfService_NotEnoughFee(s_participantFee);
         }
 
-        for (uint256 i; i < s_participants.length; i++) {
-            if (s_participants[i] == newParticipant) {
-                revert DenialOfService_UnableToRejoin();
-            }
+        if (s_isParticipantExists[newParticipant] == true) {
+            revert DenialOfService_UnableToRejoin();
         }
 
-        s_participants.push(newParticipant);
+        s_participants[s_participantCurrentId] = newParticipant;
+        s_participantCurrentId++;
+        s_isParticipantExists[newParticipant] = true;
 
         emit NewParticipantEntered(newParticipant);
     }
 
     function getWinner() public onlyOwner returns (uint256 requestId) {
-        if (s_participants.length < 10) {
-            revert DenialOfService_NotEnoughParticipants(s_participants);
+        if (s_participantCurrentId < 10) {
+            revert DenialOfService_NotEnoughParticipants(
+                s_participantCurrentId
+            );
         }
 
         requestId = COORDINATOR.requestRandomWords(
@@ -128,64 +133,37 @@ contract DenialOfService is VRFConsumerBaseV2, Ownable {
         if (s_isRaffleOpen) {
             revert DenialOfService_RaffleNotOpen();
         }
-        uint256 randomValue = (randomWords[0] % s_participants.length) + 1;
+        uint256 randomValue = (randomWords[0] % s_participantCurrentId) + 1;
         address winner = s_participants[randomValue];
+        uint256 prize = s_participantCurrentId * s_participantFee;
 
-        s_recentWinner = winner;
+        s_winnerBalance[winner] = prize;
+        s_isRaffleOpen = true;
+        delete s_participantCurrentId;
 
         emit GetTheWinner(requestId, winner);
     }
 
-    // dos: external call failing
+    // dos: external call failing (push / pull)
     function claimPrize() public {
-        address winner = s_recentWinner;
-        if (winner != msg.sender) {
-            revert DenialOfService_NotTheWinner(s_recentWinner);
+        uint256 balance = s_winnerBalance[msg.sender];
+        if (balance <= 0) {
+            revert DenialOfService_InsufficientBalance();
         }
 
-        uint256 prize = s_participants.length * s_participantFee;
+        s_winnerBalance[msg.sender] = 0;
 
-        delete s_participants;
-        delete s_recentWinner;
-        s_isRaffleOpen = true;
-
-        (bool sent, ) = winner.call{value: prize}("");
+        (bool sent, ) = msg.sender.call{value: balance}("");
 
         if (!sent) {
             revert DenialOfService_SendingEtherError();
         }
 
-        emit WinnerPrizeClaimed(winner, prize);
-    }
-
-    // dos: external call failing
-    function sentPrizeToWinner() public onlyOwner {
-        address winner = s_recentWinner;
-        if (winner == address(0)) {
-            revert DenialOfService_DontHaveWinner();
-        }
-
-        uint256 prize = s_participants.length * s_participantFee;
-
-        delete s_participants;
-        delete s_recentWinner;
-        s_isRaffleOpen = true;
-
-        (bool sent, ) = winner.call{value: prize}("");
-
-        if (!sent) {
-            revert DenialOfService_SendingEtherError();
-        }
-
-        emit SentPrizeToWinner(winner, prize);
+        emit WinnerPrizeClaimed(msg.sender, balance);
     }
 
     function getParticipantFee() public view returns (uint) {
         return s_participantFee;
-    }
-
-    function getRecentWinner() public view returns (address) {
-        return s_recentWinner;
     }
 }
 

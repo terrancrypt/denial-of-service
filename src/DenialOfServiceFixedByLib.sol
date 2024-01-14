@@ -4,22 +4,28 @@ pragma solidity ^0.8.22;
 import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
 import {VRFCoordinatorV2Interface} from "@chainlink/contracts/src/v0.8/vrf/interfaces/VRFCoordinatorV2Interface.sol";
 import {VRFConsumerBaseV2} from "@chainlink/contracts/src/v0.8/vrf/VRFConsumerBaseV2.sol";
+import {EnumerableSet} from "@openzeppelin/contracts/utils/structs/EnumerableSet.sol";
 
 /// @author terrancrypt
 /// @dev Contract này giúp tạo một contract sổ xố, khi người tham gia (participants) có thể nạp tiền của họ vào để tham gia vào sổ xố với mức phí được owner quy định sẵn. Chỉ một người trúng thưởng khi owner tìm ra người chiến thắng thông qua Chainlink VRF. Tiền của mọi người chơi khác nạp vào sẽ được chuyển cho người thắng cuộc.
 contract DenialOfService is VRFConsumerBaseV2, Ownable {
+    using EnumerableSet for EnumerableSet.AddressSet;
+
     error DenialOfService_UnableToRejoin();
     error DenialOfService_NotEnoughFee(uint fee);
     error DenialOfService_SendingEtherError();
     error DenialOfService_RaffleNotOpen();
     error DenialOfService_NotTheWinner(address winner);
-    error DenialOfService_NotEnoughParticipants(address[] currentParticipants);
+    error DenialOfService_NotEnoughParticipants(uint256 numberOfParticipants);
     error DenialOfService_DontHaveWinner();
+    error DenialOfService_InsufficientBalance();
 
-    address[] private s_participants; // chứa thông tin những người tham gia vào xổ số
+    EnumerableSet.AddressSet private s_participants;
+
     uint private s_participantFee; // chứa thông tin về phí tham gia của mỗi người chơi
     bool private s_isRaffleOpen; //  cho biết xổ số có đang mở để tham gia hay không
-    address private s_recentWinner; // cho biết người trúng số gần nhất là ai
+
+    mapping(address winner => uint256 amount) private s_winnerBalance;
 
     // Chainlink VRF // Để lấy số ngẫu nhiên một cách công bằng
     uint64 s_subscriptionId;
@@ -69,15 +75,11 @@ contract DenialOfService is VRFConsumerBaseV2, Ownable {
 
         // DOS: unbounded for loop
         for (uint256 i; i < newParticipants.length; i++) {
-            for (uint256 j; j < s_participants.length; j++) {
-                if (newParticipants[i] == s_participants[j]) {
-                    revert DenialOfService_UnableToRejoin();
-                }
+            if (s_participants.contains(newParticipants[i])) {
+                revert DenialOfService_UnableToRejoin();
             }
-        }
 
-        for (uint256 i; i < newParticipants.length; i++) {
-            s_participants.push(newParticipants[i]);
+            s_participants.add(newParticipants[i]);
         }
 
         emit NewParticipantsEntered(newParticipants);
@@ -92,20 +94,20 @@ contract DenialOfService is VRFConsumerBaseV2, Ownable {
             revert DenialOfService_NotEnoughFee(s_participantFee);
         }
 
-        for (uint256 i; i < s_participants.length; i++) {
-            if (s_participants[i] == newParticipant) {
-                revert DenialOfService_UnableToRejoin();
-            }
+        if (s_participants.contains(newParticipant)) {
+            revert DenialOfService_UnableToRejoin();
         }
 
-        s_participants.push(newParticipant);
+        s_participants.add(newParticipant);
 
         emit NewParticipantEntered(newParticipant);
     }
 
     function getWinner() public onlyOwner returns (uint256 requestId) {
-        if (s_participants.length < 10) {
-            revert DenialOfService_NotEnoughParticipants(s_participants);
+        if (s_participants.length() < 10) {
+            revert DenialOfService_NotEnoughParticipants(
+                s_participants.length()
+            );
         }
 
         requestId = COORDINATOR.requestRandomWords(
@@ -128,64 +130,37 @@ contract DenialOfService is VRFConsumerBaseV2, Ownable {
         if (s_isRaffleOpen) {
             revert DenialOfService_RaffleNotOpen();
         }
-        uint256 randomValue = (randomWords[0] % s_participants.length) + 1;
-        address winner = s_participants[randomValue];
+        uint256 randomValue = (randomWords[0] % s_participants.length()) + 1;
+        address winner = s_participants.at(randomValue);
+        uint256 prize = s_participants.length() * s_participantFee;
 
-        s_recentWinner = winner;
+        s_winnerBalance[winner] = prize;
+        s_isRaffleOpen = true;
+        delete s_participants;
 
         emit GetTheWinner(requestId, winner);
     }
 
-    // dos: external call failing
+    // dos: external call failing (push / pull)
     function claimPrize() public {
-        address winner = s_recentWinner;
-        if (winner != msg.sender) {
-            revert DenialOfService_NotTheWinner(s_recentWinner);
+        uint256 balance = s_winnerBalance[msg.sender];
+        if (balance <= 0) {
+            revert DenialOfService_InsufficientBalance();
         }
 
-        uint256 prize = s_participants.length * s_participantFee;
+        s_winnerBalance[msg.sender] = 0;
 
-        delete s_participants;
-        delete s_recentWinner;
-        s_isRaffleOpen = true;
-
-        (bool sent, ) = winner.call{value: prize}("");
+        (bool sent, ) = msg.sender.call{value: balance}("");
 
         if (!sent) {
             revert DenialOfService_SendingEtherError();
         }
 
-        emit WinnerPrizeClaimed(winner, prize);
-    }
-
-    // dos: external call failing
-    function sentPrizeToWinner() public onlyOwner {
-        address winner = s_recentWinner;
-        if (winner == address(0)) {
-            revert DenialOfService_DontHaveWinner();
-        }
-
-        uint256 prize = s_participants.length * s_participantFee;
-
-        delete s_participants;
-        delete s_recentWinner;
-        s_isRaffleOpen = true;
-
-        (bool sent, ) = winner.call{value: prize}("");
-
-        if (!sent) {
-            revert DenialOfService_SendingEtherError();
-        }
-
-        emit SentPrizeToWinner(winner, prize);
+        emit WinnerPrizeClaimed(msg.sender, balance);
     }
 
     function getParticipantFee() public view returns (uint) {
         return s_participantFee;
-    }
-
-    function getRecentWinner() public view returns (address) {
-        return s_recentWinner;
     }
 }
 
