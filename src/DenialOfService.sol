@@ -1,10 +1,12 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.8.0;
+pragma solidity ^0.8.22;
 
 import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
 import {VRFCoordinatorV2Interface} from "@chainlink/contracts/src/v0.8/vrf/interfaces/VRFCoordinatorV2Interface.sol";
 import {VRFConsumerBaseV2} from "@chainlink/contracts/src/v0.8/vrf/VRFConsumerBaseV2.sol";
 
+/// @author terrancrypt
+/// @dev Contract này giúp tạo một contract sổ xố, khi người tham gia (participants) có thể nạp tiền của họ vào để tham gia vào sổ xố với mức phí được owner quy định sẵn. Chỉ một người trúng thưởng khi owner tìm ra người chiến thắng thông qua Chainlink VRF. Tiền của mọi người chơi khác nạp vào sẽ được chuyển cho người thắng cuộc.
 contract DenialOfService is VRFConsumerBaseV2, Ownable {
     error DenialOfService_UnableToRejoin();
     error DenialOfService_NotEnoughFee(uint fee);
@@ -14,12 +16,12 @@ contract DenialOfService is VRFConsumerBaseV2, Ownable {
     error DenialOfService_NotEnoughParticipants(address[] currentParticipants);
     error DenialOfService_DontHaveWinner();
 
-    address[] private s_participants;
-    uint private s_participantFee;
-    bool private s_isRaffleOpen;
-    address private s_recentWinner;
+    address[] private s_participants; // chứa thông tin những người tham gia vào xổ số
+    uint private s_participantFee; // chứa thông tin về phí tham gia của mỗi người chơi
+    bool private s_isRaffleOpen; //  cho biết xổ số có đang mở để tham gia hay không
+    address private s_recentWinner; // cho biết người trúng số gần nhất là ai
 
-    // Chainlink VRF
+    // Chainlink VRF // Để lấy số ngẫu nhiên một cách công bằng
     uint64 s_subscriptionId;
     address s_owner;
     VRFCoordinatorV2Interface COORDINATOR;
@@ -28,9 +30,9 @@ contract DenialOfService is VRFConsumerBaseV2, Ownable {
     // This key hash for Sepolia testnet
     bytes32 s_keyHash =
         0x474e34a077df58807dbe9c96d3c009b23b3c6d0cce433e59bbf5b34f823bc56c;
-    uint32 callbackGasLimit = 100000;
-    uint16 requestConfirmations = 3;
-    uint32 numWords = 1;
+    uint32 callbackGasLimit = 100000; // giới hạn gas limit gọi lại của chainlink là bao nhiêu
+    uint16 requestConfirmations = 3; // 3 node của chainlink sẽ confirm số ngẫu nhiên
+    uint32 numWords = 1; // chỉ lấy một số ngẫu nhiên từ chainlink vrf
 
     constructor(
         address _owner,
@@ -55,6 +57,10 @@ contract DenialOfService is VRFConsumerBaseV2, Ownable {
     }
 
     function enterRaffle(address[] memory newParticipants) public payable {
+        if (!s_isRaffleOpen) {
+            revert DenialOfService_RaffleNotOpen();
+        }
+
         if (msg.value != s_participantFee * newParticipants.length) {
             revert DenialOfService_NotEnoughFee(
                 s_participantFee * newParticipants.length
@@ -77,6 +83,10 @@ contract DenialOfService is VRFConsumerBaseV2, Ownable {
     }
 
     function enterRaffleSingle(address newParticipant) public payable {
+        if (!s_isRaffleOpen) {
+            revert DenialOfService_RaffleNotOpen();
+        }
+
         if (msg.value != s_participantFee) {
             revert DenialOfService_NotEnoughFee(s_participantFee);
         }
@@ -114,7 +124,7 @@ contract DenialOfService is VRFConsumerBaseV2, Ownable {
         uint256 requestId,
         uint256[] memory randomWords
     ) internal override {
-        if (s_isRaffleOpen) {
+        if (!s_isRaffleOpen) {
             revert DenialOfService_RaffleNotOpen();
         }
         uint256 randomValue = (randomWords[0] % s_participants.length) + 1;
@@ -147,13 +157,12 @@ contract DenialOfService is VRFConsumerBaseV2, Ownable {
     }
 
     function sentPrizeToWinner() public onlyOwner {
-        if (s_recentWinner == address(0)) {
+        address winner = s_recentWinner;
+        if (winner == address(0)) {
             revert DenialOfService_DontHaveWinner();
         }
 
         uint256 prize = s_participants.length * s_participantFee;
-
-        address winner = s_recentWinner;
 
         delete s_participants;
         delete s_recentWinner;

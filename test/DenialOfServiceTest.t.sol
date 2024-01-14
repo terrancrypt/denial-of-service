@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.8.0;
+pragma solidity ^0.8.22;
 
 import {Test, console} from "forge-std/Test.sol";
 import {DeployDenialOfService} from "script/DeployDenialOfService.s.sol";
-import {DenialOfService, AttackDenialOfService} from "src/DenialOfServiceFixedByLib.sol";
+import {DenialOfService, AttackDenialOfService} from "src/DenialOfService.sol";
 import {VRFCoordinatorV2Mock} from "@chainlink/contracts/src/v0.8/vrf/mocks/VRFCoordinatorV2Mock.sol";
 
 contract DenialOfServiceTest is Test {
